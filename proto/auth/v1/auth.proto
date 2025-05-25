@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package auth.v1;
+
+option go_package = "github.com/olezhek28/auth-service/pkg/auth_v1;auth_v1";
+
+import "google/protobuf/timestamp.proto";
+
+// Сервис аутентификации
+service AuthService {
+  // Вход в систему
+  rpc Login(LoginRequest) returns (LoginResponse);
+  
+  // Регистрация пользователя
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  
+  // Получение информации о текущем пользователе
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+}
+
+// Запрос на вход
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+}
+
+// Ответ на вход
+message LoginResponse {
+  string session_uuid = 1;
+}
+
+// Запрос на регистрацию
+message RegisterRequest {
+  string email = 1;
+  string username = 2;
+  string password = 3;
+}
+
+// Ответ на регистрацию
+message RegisterResponse {
+  int64 user_uuid = 1;
+}
+
+// Запрос информации о пользователе
+message WhoAmIRequest {
+    string session_uuid = 1;
+}
+
+// Ответ с информацией о пользователе
+message WhoAmIResponse {
+  int64 user_uuid = 1;
+  string email = 2;
+  string username = 3;
+  google.protobuf.Timestamp created_at = 4;
+}

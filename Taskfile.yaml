@@ -1,0 +1,223 @@
+version: '3'
+
+# Глобальные переменные проекта
+vars:
+  GOLANGCI_LINT_VERSION: 'v2.1.5'
+  GCI_VERSION: 'v0.13.6'
+  GOFUMPT_VERSION: 'v0.8.0'
+  BUF_VERSION: '1.53.0'
+  PROTOC_GEN_GO_VERSION: 'v1.36.6'
+  PROTOC_GEN_GO_GRPC_VERSION: 'v1.5.1'
+  GRPCURL_VERSION: 'v1.9.1'
+
+  BIN_DIR: '{{.ROOT_DIR}}/bin'
+  GOLANGCI_LINT: '{{.BIN_DIR}}/golangci-lint'
+  GCI: '{{.BIN_DIR}}/gci'
+  GOFUMPT: '{{.BIN_DIR}}/gofumpt'
+  BUF: '{{.BIN_DIR}}/buf'
+  PROTOC_GEN_GO: '{{.BIN_DIR}}/protoc-gen-go'
+  PROTOC_GEN_GO_GRPC: '{{.BIN_DIR}}/protoc-gen-go-grpc'
+  GRPCURL: '{{.BIN_DIR}}/grpcurl'
+
+  # gRPC сервер
+  GRPC_HOST: 'localhost:50051'
+
+tasks:
+  install-formatters:
+    desc: "Устанавливает форматтеры gci и gofumpt в ./bin"
+    cmds:
+      - |
+        [ -f {{.GOFUMPT}} ] || {
+          echo '📦 Устанавливаем gofumpt {{.GOFUMPT_VERSION}}...'
+          GOBIN={{.BIN_DIR}} go install mvdan.cc/gofumpt@{{.GOFUMPT_VERSION}}
+        }
+        [ -f {{.GCI}} ] || {
+          echo '📦 Устанавливаем gci {{.GCI_VERSION}}...'
+          GOBIN={{.BIN_DIR}} go install github.com/daixiang0/gci@{{.GCI_VERSION}}
+        }
+    status:
+      - test -x {{.GOFUMPT}}
+      - test -x {{.GCI}}
+
+  format:
+    desc: "Форматирует весь проект gofumpt + gci"
+    deps: [ install-formatters ]
+    cmds:
+      - |
+        echo "🧼 Форматируем через gofumpt ..."
+        find . -type f -name '*.go' ! -path '*/mocks/*' -exec {{.GOFUMPT}} -extra -w {} +
+      - |
+        echo "🎯 Сортируем импорты через gci ..."
+        find . -type f -name '*.go' ! -path '*/mocks/*' -exec {{.GCI}} write -s standard -s default -s "prefix(github.com/olezhek28/microservices-course-examples/week_1/grpc_with_interceptor)" {} +
+
+  install-golangci-lint:
+    desc: "Устанавливает golangci-lint в каталог bin"
+    cmds:
+      - |
+        [ -f {{.GOLANGCI_LINT}} ] || {
+          mkdir -p {{.BIN_DIR}}
+          echo "📦 Устанавливаем golangci-lint {{.GOLANGCI_LINT_VERSION}}..."
+          GOBIN={{.BIN_DIR}} go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
+        }
+    status:
+      - test -x {{.GOLANGCI_LINT}}
+
+  lint:
+    desc: "Запускает golangci-lint для всех модулей"
+    deps: [ install-golangci-lint ]
+    cmds:
+      - '{{.GOLANGCI_LINT}} run ./... --config=.golangci.yml'
+
+  install-buf:
+    desc: "Устанавливает Buf в каталог bin"
+    cmds:
+      - |
+        mkdir -p {{.BIN_DIR}}
+        [ -f {{.BUF}} ] || {
+          echo '📦 Устанавливаем buf {{.BUF_VERSION}}...'
+          GOBIN={{.BIN_DIR}} go install github.com/bufbuild/buf/cmd/buf@v{{.BUF_VERSION}}
+        }
+    status:
+      - test -x {{.BUF}}
+
+  install-grpcurl:
+    desc: "Устанавливает grpcurl в каталог bin"
+    cmds:
+      - |
+        mkdir -p {{.BIN_DIR}}
+        [ -f {{.GRPCURL}} ] || {
+          echo '📦 Устанавливаем grpcurl {{.GRPCURL_VERSION}}...'
+          GOBIN={{.BIN_DIR}} go install github.com/fullstorydev/grpcurl/cmd/grpcurl@{{.GRPCURL_VERSION}}
+        }
+    status:
+      - test -x {{.GRPCURL}}
+
+  proto:install-plugins:
+    desc: "Устанавливает protoc плагины в каталог bin"
+    cmds:
+      - |
+        [ -f {{.PROTOC_GEN_GO}} ] || {
+          echo '📦 Installing protoc-gen-go...'
+          GOBIN={{.BIN_DIR}} go install google.golang.org/protobuf/cmd/protoc-gen-go@{{.PROTOC_GEN_GO_VERSION}}
+        }
+        [ -f {{.PROTOC_GEN_GO_GRPC}} ] || {
+          echo '📦 Installing protoc-gen-go-grpc...'
+          GOBIN={{.BIN_DIR}} go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@{{.PROTOC_GEN_GO_GRPC_VERSION}}
+        }
+
+  proto:lint:
+    deps: [ install-buf, proto:install-plugins ]
+    desc: Проверка .proto-файлов на соответствие стилю
+    dir: proto
+    cmds:
+      - '{{.BUF}} lint'
+
+  proto:gen:
+    deps: [ install-buf, proto:install-plugins, proto:lint ]
+    desc: Генерация Go-кода из .proto
+    dir: proto
+    cmds:
+      - '{{.BUF}} generate'
+
+  # API тесты
+  test:grpc:list:
+    deps: [ install-grpcurl ]
+    desc: "Показать доступные gRPC сервисы"
+    cmds:
+      - echo "📋 Список доступных gRPC сервисов:"
+      - '{{.GRPCURL}} -plaintext {{.GRPC_HOST}} list'
+
+  test:grpc:describe:
+    deps: [ install-grpcurl ]
+    desc: "Описание AuthService"
+    cmds:
+      - echo "📖 Описание AuthService:"
+      - '{{.GRPCURL}} -plaintext {{.GRPC_HOST}} describe auth.v1.AuthService'
+
+  test:register:success:
+    deps: [ install-grpcurl ]
+    desc: "Тест успешной регистрации пользователя"
+    cmds:
+      - echo "✅ Тестируем успешную регистрацию..."
+      - |
+        {{.GRPCURL}} -plaintext \
+          -d '{
+            "email": "test@example.com",
+            "username": "testuser",
+            "password": "password123"
+          }' \
+          {{.GRPC_HOST}} auth.v1.AuthService/Register
+
+  test:register:duplicate:
+    deps: [ install-grpcurl ]
+    desc: "Тест регистрации с дублирующимся email"
+    cmds:
+      - echo "❌ Тестируем регистрацию с дублирующимся email..."
+      - |
+        {{.GRPCURL}} -plaintext \
+          -d '{
+            "email": "test@example.com",
+            "username": "testuser2",
+            "password": "password123"
+          }' \
+          {{.GRPC_HOST}} auth.v1.AuthService/Register
+
+  test:register:invalid:
+    deps: [ install-grpcurl ]
+    desc: "Тест регистрации с невалидными данными"
+    cmds:
+      - echo "❌ Тестируем регистрацию с коротким паролем..."
+      - |
+        {{.GRPCURL}} -plaintext \
+          -d '{
+            "email": "invalid@example.com",
+            "username": "invaliduser",
+            "password": "123"
+          }' \
+          {{.GRPC_HOST}} auth.v1.AuthService/Register
+      - echo "❌ Тестируем регистрацию без email..."
+      - |
+        {{.GRPCURL}} -plaintext \
+          -d '{
+            "email": "",
+            "username": "noemailuser",
+            "password": "password123"
+          }' \
+          {{.GRPC_HOST}} auth.v1.AuthService/Register
+
+  test:login:
+    deps: [ install-grpcurl ]
+    desc: "Тест входа в систему"
+    cmds:
+      - echo "🔐 Тестируем вход в систему..."
+      - |
+        {{.GRPCURL}} -plaintext \
+          -d '{
+            "email": "test@example.com",
+            "password": "password123"
+          }' \
+          {{.GRPC_HOST}} auth.v1.AuthService/Login
+
+  test:whoami:
+    deps: [ install-grpcurl ]
+    desc: "Тест получения информации о пользователе"
+    cmds:
+      - echo "👤 Тестируем получение информации о пользователе..."
+      - |
+        {{.GRPCURL}} -plaintext \
+          -d '{
+            "session_uuid": "session-uuid-123"
+          }' \
+          {{.GRPC_HOST}} auth.v1.AuthService/WhoAmI
+
+  test:api:all:
+    desc: "Запуск всех API тестов"
+    deps: [ install-grpcurl ]
+    cmds:
+      - task: test:grpc:list
+      - task: test:grpc:describe
+      - task: test:register:success
+      - task: test:register:duplicate
+      - task: test:register:invalid
+      - task: test:login
+      - task: test:whoami
