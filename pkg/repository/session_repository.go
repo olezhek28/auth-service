@@ -1,17 +1,21 @@
 package repository
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/gomodule/redigo/redis"
 	"github.com/google/uuid"
+
+	apperrors "github.com/olezhek28/auth-service/pkg/errors"
 )
 
 // SessionRepository интерфейс для работы с сессиями
 type SessionRepository interface {
-	CreateSession(userUUID uuid.UUID) (string, error)
-	GetSession(sessionUUID string) (uuid.UUID, error)
-	DeleteSession(sessionUUID string) error
+	CreateSession(ctx context.Context, userUUID uuid.UUID, ttl time.Duration) (string, error)
+	GetSession(ctx context.Context, sessionUUID string) (uuid.UUID, error)
+	DeleteSession(ctx context.Context, sessionUUID string) error
 }
 
 // sessionRepository реализация репозитория сессий
@@ -27,15 +31,15 @@ func NewSessionRepository(pool *redis.Pool) SessionRepository {
 }
 
 // CreateSession создает новую сессию для пользователя
-func (r *sessionRepository) CreateSession(userUUID uuid.UUID) (string, error) {
+func (r *sessionRepository) CreateSession(ctx context.Context, userUUID uuid.UUID, ttl time.Duration) (string, error) {
 	conn := r.pool.Get()
 	defer conn.Close()
 
 	sessionUUID := uuid.New().String()
 	sessionKey := fmt.Sprintf("session:%s", sessionUUID)
 
-	// Сохраняем сессию на 24 часа
-	_, err := conn.Do("SETEX", sessionKey, 86400, userUUID.String())
+	// Сохраняем сессию с указанным TTL
+	_, err := conn.Do("SETEX", sessionKey, int(ttl.Seconds()), userUUID.String())
 	if err != nil {
 		return "", fmt.Errorf("failed to create session: %w", err)
 	}
@@ -44,7 +48,7 @@ func (r *sessionRepository) CreateSession(userUUID uuid.UUID) (string, error) {
 }
 
 // GetSession получает UUID пользователя по UUID сессии
-func (r *sessionRepository) GetSession(sessionUUID string) (uuid.UUID, error) {
+func (r *sessionRepository) GetSession(ctx context.Context, sessionUUID string) (uuid.UUID, error) {
 	conn := r.pool.Get()
 	defer conn.Close()
 
@@ -53,7 +57,7 @@ func (r *sessionRepository) GetSession(sessionUUID string) (uuid.UUID, error) {
 	userUUIDStr, err := redis.String(conn.Do("GET", sessionKey))
 	if err != nil {
 		if err == redis.ErrNil {
-			return uuid.Nil, fmt.Errorf("session not found")
+			return uuid.Nil, apperrors.ErrSessionNotFound
 		}
 		return uuid.Nil, fmt.Errorf("failed to get session: %w", err)
 	}
@@ -67,7 +71,7 @@ func (r *sessionRepository) GetSession(sessionUUID string) (uuid.UUID, error) {
 }
 
 // DeleteSession удаляет сессию
-func (r *sessionRepository) DeleteSession(sessionUUID string) error {
+func (r *sessionRepository) DeleteSession(ctx context.Context, sessionUUID string) error {
 	conn := r.pool.Get()
 	defer conn.Close()
 

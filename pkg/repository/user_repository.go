@@ -2,21 +2,22 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"time"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"golang.org/x/crypto/bcrypt"
 
+	apperrors "github.com/olezhek28/auth-service/pkg/errors"
 	"github.com/olezhek28/auth-service/pkg/models"
 )
 
 // UserRepository интерфейс для работы с пользователями
 type UserRepository interface {
-	CreateUser(ctx context.Context, req models.CreateUserRequest) (*models.User, error)
+	CreateUser(ctx context.Context, user *models.User) error
 	GetUserByEmail(ctx context.Context, email string) (*models.User, error)
 	GetUserByUUID(ctx context.Context, userUUID uuid.UUID) (*models.User, error)
 }
@@ -36,43 +37,29 @@ func NewUserRepository(db *pgxpool.Pool) UserRepository {
 }
 
 // CreateUser создает нового пользователя
-func (r *userRepository) CreateUser(ctx context.Context, req models.CreateUserRequest) (*models.User, error) {
-	// Хешируем пароль
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		return nil, fmt.Errorf("failed to hash password: %w", err)
-	}
-
-	userUUID := uuid.New()
-	now := time.Now()
-
+func (r *userRepository) CreateUser(ctx context.Context, user *models.User) error {
 	// Строим SQL запрос
 	query, args, err := r.qb.
 		Insert("users").
 		Columns("uuid", "email", "username", "password_hash", "created_at", "updated_at").
-		Values(userUUID, req.Email, req.Username, string(passwordHash), now, now).
-		Suffix("RETURNING id, uuid, email, username, password_hash, created_at, updated_at").
+		Values(user.UUID, user.Email, user.Username, user.PasswordHash, user.CreatedAt, user.UpdatedAt).
+		Suffix("RETURNING id").
 		ToSql()
 	if err != nil {
-		return nil, fmt.Errorf("failed to build insert query: %w", err)
+		return fmt.Errorf("failed to build insert query: %w", err)
 	}
 
 	// Выполняем запрос
-	var user models.User
-	err = r.db.QueryRow(ctx, query, args...).Scan(
-		&user.ID,
-		&user.UUID,
-		&user.Email,
-		&user.Username,
-		&user.PasswordHash,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-	)
+	err = r.db.QueryRow(ctx, query, args...).Scan(&user.ID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create user: %w", err)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+			return apperrors.ErrUserAlreadyExists
+		}
+		return fmt.Errorf("failed to create user: %w", err)
 	}
 
-	return &user, nil
+	return nil
 }
 
 // GetUserByEmail получает пользователя по email
@@ -97,8 +84,8 @@ func (r *userRepository) GetUserByEmail(ctx context.Context, email string) (*mod
 		&user.UpdatedAt,
 	)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("user not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.ErrUserNotFound
 		}
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
@@ -128,8 +115,8 @@ func (r *userRepository) GetUserByUUID(ctx context.Context, userUUID uuid.UUID) 
 		&user.UpdatedAt,
 	)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("user not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperrors.ErrUserNotFound
 		}
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
